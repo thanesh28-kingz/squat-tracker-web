@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Squat Form Tracker</title>
+<style>
+  :root{
+    --bg:#0b0f0e; --panel:#121917; --panel-2:#182420; --line:#203029;
+    --fg:#eef3f0; --fg-dim:#9fb0a9; --accent:#4ee0a0; --accent-dim:#1f4d3b;
+    --warn:#ffb648; --bad:#ff6b6b; --good:#4ee0a0;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Inter",system-ui,sans-serif;
+    display:flex; flex-direction:column;
+    padding-left:max(16px, env(safe-area-inset-left,0px));
+    padding-right:max(16px, env(safe-area-inset-right,0px));
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  header{
+    padding:14px 0 10px; display:flex; align-items:baseline; justify-content:space-between;
+  }
+  header h1{font-size:17px; margin:0; font-weight:700; letter-spacing:-0.01em;}
+  header span{font-size:12px; color:var(--fg-dim);}
+  main{flex:1; display:flex; flex-direction:column; gap:12px; padding-bottom:16px; min-height:0;}
+
+  #videoWrap{
+    position:relative; width:100%; aspect-ratio:3/4; max-height:62vh;
+    background:#000; border-radius:16px; overflow:hidden; border:1px solid var(--line);
+  }
+  #video, #overlay{
+    position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+  }
+  #video.mirror, #overlay.mirror{ transform:scaleX(-1); }
+  #video{ visibility:hidden; } /* only the canvas is actually shown */
+
+  #placeholder{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:14px; text-align:center; padding:24px;
+  }
+  #placeholder p{color:var(--fg-dim); font-size:14px; margin:0; max-width:28ch;}
+
+  #countdownOverlay{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.55); flex-direction:column; gap:8px;
+  }
+  #countdownNum{font-size:72px; font-weight:800; color:var(--accent); font-variant-numeric:tabular-nums;}
+  #countdownLabel{color:var(--fg); font-size:15px;}
+
+  #statusBanner{
+    position:absolute; left:10px; right:10px; top:10px; padding:8px 12px; border-radius:10px;
+    background:rgba(0,0,0,0.55); font-size:13px; color:var(--warn); text-align:center;
+  }
+  #statusBanner[hidden]{display:none;}
+  #errorBanner{
+    border-radius:10px; background:#2a1414; border:1px solid #5a2323; color:var(--bad);
+    padding:10px 12px; font-size:13px;
+  }
+  #errorBanner[hidden]{display:none;}
+
+  #hud{display:flex; align-items:center; justify-content:space-between; gap:12px;}
+  #repBlock{display:flex; flex-direction:column; align-items:flex-start;}
+  #repCount{font-size:44px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1;}
+  #repLabel{font-size:12px; color:var(--fg-dim); text-transform:uppercase; letter-spacing:.06em;}
+  #cueText{font-size:14px; color:var(--warn); text-align:right; max-width:55%; min-height:1.2em;}
+
+  #controls{display:flex; gap:10px;}
+  button{
+    flex:1; border:none; border-radius:12px; padding:14px 16px; font-size:16px; font-weight:700;
+    font-family:inherit; cursor:pointer;
+  }
+  #startBtn{background:var(--accent); color:#06120d;}
+  #stopBtn{background:var(--bad); color:#2a0a0a;}
+  #flipBtn, #openCamBtn, #tryAgainBtn{background:var(--panel-2); color:var(--fg); border:1px solid var(--line);}
+  #flipBtn{flex:0 0 auto; padding:14px 18px;}
+  button[hidden]{display:none;}
+  button:active{opacity:0.85;}
+
+  #summary{display:flex; flex-direction:column; gap:14px; padding:4px 0 16px;}
+  #summary h2{margin:4px 0 0; font-size:20px;}
+  .statGrid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .statCard{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px;}
+  .statCard .n{font-size:28px; font-weight:800; font-variant-numeric:tabular-nums;}
+  .statCard .l{font-size:12px; color:var(--fg-dim); margin-top:2px;}
+  .statCard.good .n{color:var(--good);}
+  .statCard.bad .n{color:var(--bad);}
+
+  footer{padding-bottom:10px; text-align:center; font-size:11px; color:var(--fg-dim);}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Squat Form Tracker</h1>
+  <span id="modelState">loading model…</span>
+</header>
+
+<main id="mainView">
+  <div id="videoWrap">
+    <video id="video" playsinline webkit-playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div id="placeholder">
+      <p id="placeholderText">Tap "Open Camera" to begin. Stand far enough back that your whole body is visible.</p>
+    </div>
+    <div id="statusBanner" hidden></div>
+    <div id="countdownOverlay" hidden>
+      <div id="countdownNum">5</div>
+      <div id="countdownLabel">Get ready…</div>
+    </div>
+  </div>
+
+  <div id="errorBanner" hidden></div>
+
+  <div id="hud">
+    <div id="repBlock">
+      <div id="repCount">0</div>
+      <div id="repLabel">Reps</div>
+    </div>
+    <div id="cueText"></div>
+  </div>
+
+  <div id="controls">
+    <button id="openCamBtn">Open Camera</button>
+    <button id="startBtn" hidden>Start</button>
+    <button id="stopBtn" hidden>Stop</button>
+    <button id="flipBtn" hidden title="Switch camera">⟲</button>
+  </div>
+</main>
+
+<section id="summary" hidden>
+  <h2>Session summary</h2>
+  <div class="statGrid">
+    <div class="statCard"><div class="n" id="sumTotal">0</div><div class="l">Total reps</div></div>
+    <div class="statCard good"><div class="n" id="sumGood">0</div><div class="l">Good depth</div></div>
+    <div class="statCard bad"><div class="n" id="sumCave">0</div><div class="l">Knees caving in</div></div>
+    <div class="statCard bad"><div class="n" id="sumLean">0</div><div class="l">Excessive forward lean</div></div>
+  </div>
+  <button id="tryAgainBtn">Try again</button>
+</section>
+
+<footer>Runs locally in your browser — camera video never leaves your phone.</footer>
+
+<script type="module">
+import { FilesetResolver, PoseLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest";
+
+// ---- Landmark indices (match MediaPipe BlazePose / the Android app) ----
+const LEFT_SHOULDER=11, RIGHT_SHOULDER=12, LEFT_HIP=23, RIGHT_HIP=24,
+      LEFT_KNEE=25, RIGHT_KNEE=26, LEFT_ANKLE=27, RIGHT_ANKLE=28;
+const MIN_VISIBILITY=0.5;
+
+// ---- Thresholds (match SquatAnalyzer.kt) ----
+const STAND_THRESHOLD=160, SQUAT_THRESHOLD=120, GOOD_DEPTH_THRESHOLD=100;
+const KNEE_CAVE_FLAG_RATIO=0.8, FORWARD_LEAN_FLAG_DEG=45;
+const CUE_COOLDOWN_MS=2500;
+
+const CONNECTIONS=[
+  [11,12],[11,23],[12,24],[23,24],
+  [11,13],[13,15],[12,14],[14,16],
+  [23,25],[25,27],[27,29],[27,31],[27,31],
+  [24,26],[26,28],[28,30],[28,32],
+  [15,17],[15,19],[16,18],[16,20]
+];
+
+// ---- DOM ----
+const video=document.getElementById('video');
+const canvas=document.getElementById('overlay');
+const ctx=canvas.getContext('2d');
+const placeholder=document.getElementById('placeholder');
+const placeholderText=document.getElementById('placeholderText');
+const statusBanner=document.getElementById('statusBanner');
+const errorBanner=document.getElementById('errorBanner');
+const countdownOverlay=document.getElementById('countdownOverlay');
+const countdownNum=document.getElementById('countdownNum');
+const openCamBtn=document.getElementById('openCamBtn');
+const startBtn=document.getElementById('startBtn');
+const stopBtn=document.getElementById('stopBtn');
+const flipBtn=document.getElementById('flipBtn');
+const repCountEl=document.getElementById('repCount');
+const cueTextEl=document.getElementById('cueText');
+const modelStateEl=document.getElementById('modelState');
+const mainView=document.getElementById('mainView');
+const summaryView=document.getElementById('summary');
+const tryAgainBtn=document.getElementById('tryAgainBtn');
+
+// ---- State ----
+let poseLandmarker=null;
+let stream=null;
+let currentFacing='user';
+let lastVideoTime=-1;
+let sessionActive=false;
+let phase='standing';
+let repCount=0;
+let minAngleThisRep=999;
+let caveFlagThisRep=false;
+let leanFlagThisRep=false;
+let reps=[];
+let lastCueAt={};
+let rafId=null;
+
+function showError(msg){
+  errorBanner.hidden=false;
+  errorBanner.textContent=msg;
+  console.error(msg);
+}
+
+function angleBetweenDegrees(a,b,c){
+  const abx=a.x-b.x, aby=a.y-b.y;
+  const cbx=c.x-b.x, cby=c.y-b.y;
+  const dot=abx*cbx+aby*cby;
+  const magAb=Math.hypot(abx,aby), magCb=Math.hypot(cbx,cby);
+  if(magAb<1e-6||magCb<1e-6) return 180;
+  const cosA=Math.max(-1,Math.min(1,dot/(magAb*magCb)));
+  return Math.acos(cosA)*180/Math.PI;
+}
+
+function visible(lm,i){ return lm[i] && lm[i].visibility>=MIN_VISIBILITY; }
+
+function extractFeatures(lm){
+  let leftAngle=null, rightAngle=null;
+  if(visible(lm,LEFT_HIP)&&visible(lm,LEFT_KNEE)&&visible(lm,LEFT_ANKLE)){
+    leftAngle=angleBetweenDegrees(lm[LEFT_HIP], lm[LEFT_KNEE], lm[LEFT_ANKLE]);
+  }
+  if(visible(lm,RIGHT_HIP)&&visible(lm,RIGHT_KNEE)&&visible(lm,RIGHT_ANKLE)){
+    rightAngle=angleBetweenDegrees(lm[RIGHT_HIP], lm[RIGHT_KNEE], lm[RIGHT_ANKLE]);
+  }
+  const angles=[leftAngle,rightAngle].filter(a=>a!==null);
+  if(angles.length===0) return null;
+  const avgAngle=angles.reduce((a,b)=>a+b,0)/angles.length;
+
+  let caveRatio=null;
+  if(visible(lm,LEFT_KNEE)&&visible(lm,RIGHT_KNEE)&&visible(lm,LEFT_ANKLE)&&visible(lm,RIGHT_ANKLE)){
+    const kneeDist=Math.abs(lm[RIGHT_KNEE].x-lm[LEFT_KNEE].x);
+    const ankleDist=Math.max(Math.abs(lm[RIGHT_ANKLE].x-lm[LEFT_ANKLE].x),0.0001);
+    caveRatio=kneeDist/ankleDist;
+  }
+
+  let forwardLean=null;
+  if(visible(lm,LEFT_SHOULDER)&&visible(lm,RIGHT_SHOULDER)&&visible(lm,LEFT_HIP)&&visible(lm,RIGHT_HIP)){
+    const shX=(lm[LEFT_SHOULDER].x+lm[RIGHT_SHOULDER].x)/2;
+    const shY=(lm[LEFT_SHOULDER].y+lm[RIGHT_SHOULDER].y)/2;
+    const hipX=(lm[LEFT_HIP].x+lm[RIGHT_HIP].x)/2;
+    const hipY=(lm[LEFT_HIP].y+lm[RIGHT_HIP].y)/2;
+    const dx=Math.abs(shX-hipX);
+    const dy=Math.max(Math.abs(hipY-shY),0.0001);
+    forwardLean=Math.atan2(dx,dy)*180/Math.PI;
+  }
+  return {avgAngle, caveRatio, forwardLean};
+}
+
+function speak(text, {flush=false}={}){
+  if(!('speechSynthesis' in window)) return;
+  if(flush) window.speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(text);
+  u.lang='en-US'; u.rate=1.0;
+  window.speechSynthesis.speak(u);
+}
+
+function setStatus(text){
+  if(!text){ statusBanner.hidden=true; return; }
+  statusBanner.hidden=false;
+  statusBanner.textContent=text;
+}
+
+function maybeSpeakCue(caving, leaning){
+  const now=performance.now();
+  if(caving && now-(lastCueAt.knees||0)>CUE_COOLDOWN_MS){
+    speak('Push your knees out');
+    cueTextEl.textContent='Push your knees out';
+    lastCueAt.knees=now;
+  } else if(leaning && now-(lastCueAt.lean||0)>CUE_COOLDOWN_MS){
+    speak('Keep your chest up');
+    cueTextEl.textContent='Keep your chest up';
+    lastCueAt.lean=now;
+  }
+}
+
+function updateRepUI(){ repCountEl.textContent=String(repCount); }
+
+function processFrame(features){
+  if(!features){ setStatus('Body not fully visible — step back'); return; }
+  setStatus('');
+  const {avgAngle, caveRatio, forwardLean}=features;
+
+  if(phase==='standing' && avgAngle<=SQUAT_THRESHOLD){
+    phase='squatting';
+    minAngleThisRep=avgAngle;
+    caveFlagThisRep=false;
+    leanFlagThisRep=false;
+    cueTextEl.textContent='';
+  }
+
+  if(phase==='squatting'){
+    minAngleThisRep=Math.min(minAngleThisRep, avgAngle);
+    if(caveRatio!==null && caveRatio>=KNEE_CAVE_FLAG_RATIO) caveFlagThisRep=true;
+    if(forwardLean!==null && forwardLean>FORWARD_LEAN_FLAG_DEG) leanFlagThisRep=true;
+    maybeSpeakCue(caveFlagThisRep, leanFlagThisRep);
+
+    if(avgAngle>=STAND_THRESHOLD){
+      const goodDepth=minAngleThisRep<=GOOD_DEPTH_THRESHOLD;
+      repCount++;
+      reps.push({goodDepth, kneesCavingIn:caveFlagThisRep, excessiveForwardLean:leanFlagThisRep});
+      updateRepUI();
+      speak(String(repCount), {flush:true});
+      if(!caveFlagThisRep && !leanFlagThisRep){ cueTextEl.textContent=goodDepth? 'Good rep' : 'Go a little deeper'; }
+      phase='standing';
+    }
+  }
+}
+
+function drawOverlay(result){
+  const vw=video.videoWidth, vh=video.videoHeight;
+  if(!vw||!vh) return;
+  if(canvas.width!==vw||canvas.height!==vh){ canvas.width=vw; canvas.height=vh; }
+  ctx.clearRect(0,0,vw,vh);
+  ctx.drawImage(video,0,0,vw,vh);
+
+  const lm=result.landmarks && result.landmarks[0];
+  if(!lm) return;
+  ctx.strokeStyle='rgba(78,224,160,0.9)';
+  ctx.lineWidth=Math.max(2,vw*0.006);
+  for(const [a,b] of CONNECTIONS){
+    const pa=lm[a], pb=lm[b];
+    if(!pa||!pb||pa.visibility<MIN_VISIBILITY||pb.visibility<MIN_VISIBILITY) continue;
+    ctx.beginPath();
+    ctx.moveTo(pa.x*vw, pa.y*vh);
+    ctx.lineTo(pb.x*vw, pb.y*vh);
+    ctx.stroke();
+  }
+  ctx.fillStyle='rgba(255,70,70,0.95)';
+  const r=Math.max(3,vw*0.008);
+  for(const p of lm){
+    if(p.visibility<MIN_VISIBILITY) continue;
+    ctx.beginPath();
+    ctx.arc(p.x*vw, p.y*vh, r, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function renderLoop(){
+  rafId=requestAnimationFrame(renderLoop);
+  if(video.readyState<2 || !poseLandmarker) return;
+  if(video.currentTime===lastVideoTime) return;
+  lastVideoTime=video.currentTime;
+  let result;
+  try{
+    result=poseLandmarker.detectForVideo(video, performance.now());
+  }catch(e){ console.error(e); return; }
+  drawOverlay(result);
+  if(sessionActive){
+    const lm=result.landmarks && result.landmarks[0];
+    processFrame(lm ? extractFeatures(lm) : null);
+  }
+}
+
+async function initModel(){
+  modelStateEl.textContent='loading model…';
+  const vision=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm');
+  poseLandmarker=await PoseLandmarker.createFromOptions(vision,{
+    baseOptions:{
+      modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task',
+      delegate:'GPU'
+    },
+    runningMode:'VIDEO',
+    numPoses:1
+  });
+  modelStateEl.textContent='model ready';
+}
+
+async function startCamera(facing){
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); }
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing}, audio:false});
+  video.srcObject=stream;
+  await video.play();
+  const mirror = facing==='user';
+  video.classList.toggle('mirror', mirror);
+  canvas.classList.toggle('mirror', mirror);
+}
+
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+async function onOpenCamera(){
+  openCamBtn.disabled=true;
+  openCamBtn.textContent='Starting…';
+  try{
+    if(!poseLandmarker) await initModel();
+    await startCamera(currentFacing);
+    placeholder.hidden=true;
+    openCamBtn.hidden=true;
+    startBtn.hidden=false;
+    flipBtn.hidden=false;
+    renderLoop();
+  }catch(e){
+    showError('Could not start camera/model: '+ (e && e.message ? e.message : e));
+    openCamBtn.disabled=false;
+    openCamBtn.textContent='Open Camera';
+  }
+}
+
+async function onStart(){
+  startBtn.hidden=true;
+  flipBtn.hidden=true;
+  countdownOverlay.hidden=false;
+  speak('Get ready', {flush:true});
+  for(let s=5;s>=1;s--){
+    countdownNum.textContent=String(s);
+    speak(String(s));
+    await sleep(1000);
+  }
+  countdownOverlay.hidden=true;
+  speak('Begin', {flush:true});
+
+  phase='standing'; repCount=0; reps=[]; lastCueAt={};
+  updateRepUI();
+  cueTextEl.textContent='';
+  sessionActive=true;
+  stopBtn.hidden=false;
+}
+
+function onStop(){
+  sessionActive=false;
+  stopBtn.hidden=true;
+  const total=reps.length;
+  const good=reps.filter(r=>r.goodDepth).length;
+  const cave=reps.filter(r=>r.kneesCavingIn).length;
+  const lean=reps.filter(r=>r.excessiveForwardLean).length;
+  document.getElementById('sumTotal').textContent=String(total);
+  document.getElementById('sumGood').textContent=String(good);
+  document.getElementById('sumCave').textContent=String(cave);
+  document.getElementById('sumLean').textContent=String(lean);
+  mainView.style.display='none';
+  summaryView.hidden=false;
+}
+
+function onTryAgain(){
+  summaryView.hidden=true;
+  mainView.style.display='';
+  startBtn.hidden=false;
+  flipBtn.hidden=false;
+  cueTextEl.textContent='';
+}
+
+async function onFlip(){
+  currentFacing = currentFacing==='user' ? 'environment' : 'user';
+  try{ await startCamera(currentFacing); }
+  catch(e){ showError('Could not switch camera: '+(e&&e.message?e.message:e)); }
+}
+
+openCamBtn.addEventListener('click', onOpenCamera);
+startBtn.addEventListener('click', onStart);
+stopBtn.addEventListener('click', onStop);
+tryAgainBtn.addEventListener('click', onTryAgain);
+flipBtn.addEventListener('click', onFlip);
+
+initModel().catch(e=>showError('Model failed to load: '+(e&&e.message?e.message:e)));
+</script>
+</body>
+</html>
