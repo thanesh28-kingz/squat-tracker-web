@@ -387,7 +387,7 @@ async function onOpenCamera(){
   openCamBtn.disabled=true;
   openCamBtn.textContent='Starting…';
   try{
-    if(!poseLandmarker) await initModel();
+    await modelReadyPromise;
     await startCamera(currentFacing);
     placeholder.hidden=true;
     openCamBtn.hidden=true;
@@ -456,7 +456,10 @@ stopBtn.addEventListener('click', onStop);
 tryAgainBtn.addEventListener('click', onTryAgain);
 flipBtn.addEventListener('click', onFlip);
 
-initModel().catch(e=>showError('Model failed to load: '+(e&&e.message?e.message:e)));
+const modelReadyPromise = initModel().catch(e=>{
+  showError('Model failed to load: '+(e&&e.message?e.message:e));
+  throw e;
+});
 </script>
 </body>
 </html>
